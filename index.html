@@ -659,15 +659,30 @@
       else { btn.classList.add('locked'); btn.disabled = true; txt.innerHTML = `🔒 Need ${target - refs} More Refs (Get ${reward} ${sym})`; btn.querySelector('i').className = 'fas fa-lock'; }
     }
 
+    // 🔥 মাইলস্টোন ক্লেইম ফাংশন (Transaction ব্যবহার করে ঠিক করা হয়েছে)
     async function claimMilestone() {
-      const target = Number(appState.config.refMilestoneTarget || 20); const reward = Number(appState.config.refMilestoneReward || 200); const refs = appState.user.referrals || 0;
-      if (appState.user.milestoneClaimed) return toast('Already claimed!'); if (refs < target) return toast(`You need ${target - refs} more referrals.`);
+      const target = Number(appState.config.refMilestoneTarget || 20); 
+      const reward = Number(appState.config.refMilestoneReward || 200); 
+      const refs = appState.user.referrals || 0;
+
+      if (appState.user.milestoneClaimed) return toast('Already claimed!'); 
+      if (refs < target) return toast(`You need ${target - refs} more referrals.`);
       if (!confirm(`Claim ${reward} ${appState.config.currencySymbol || 'TK'}?`)) return;
+
       try {
-        const newBal = (appState.user.balance || 0) + reward; const newEarn = (appState.user.totalEarned || 0) + reward;
-        await db.ref('users/' + appState.user.id).update({ balance: newBal, totalEarned: newEarn, milestoneClaimed: true });
+        await db.ref('users/' + appState.user.id).transaction(user => {
+            if (user) {
+                if (user.milestoneClaimed) return; // আগেই ক্লেইম করা থাকলে কিছু করবে না
+                user.balance = (user.balance || 0) + reward;
+                user.totalEarned = (user.totalEarned || 0) + reward;
+                user.milestoneClaimed = true;
+            }
+            return user;
+        });
         showRewardPopup(reward, 'রেফারেল মাইলফলক সম্পন্ন করার জন্য!');
-      } catch (e) { toast('Error claiming reward!'); }
+      } catch (e) { 
+        toast('Error claiming reward!'); 
+      }
     }
 
     function openSupport() {
@@ -1097,8 +1112,11 @@
     }
 
     window.onload = () => {
-      document.getElementById('u-name').innerText = tgUser.first_name; document.getElementById('u-id').innerText = 'ID: ' + tgUser.id; if(tgUser.photo_url) document.getElementById('u-img').src = tgUser.photo_url;
+      document.getElementById('u-name').innerText = tgUser.first_name; 
+      document.getElementById('u-id').innerText = 'ID: ' + tgUser.id; 
+      if(tgUser.photo_url) document.getElementById('u-img').src = tgUser.photo_url;
 
+      // Config Listener
       db.ref('config').on('value', snap => {
         if(snap.exists()) {
           appState.config = snap.val();
@@ -1106,53 +1124,118 @@
           if(appState.config.supportEnabled === undefined) appState.config.supportEnabled = true;
           if(appState.config.bonusEnabled === undefined) appState.config.bonusEnabled = true;
           preloadAds();
-          if (appState.config.maintenance === true) { document.getElementById('maintenanceOverlay').style.display = 'flex'; if(document.getElementById('bonusOverlay').classList.contains('show')) hideBonus(); } else { document.getElementById('maintenanceOverlay').style.display = 'none'; }
+          if (appState.config.maintenance === true) { 
+              document.getElementById('maintenanceOverlay').style.display = 'flex'; 
+              if(document.getElementById('bonusOverlay').classList.contains('show')) hideBonus(); 
+          } else { 
+              document.getElementById('maintenanceOverlay').style.display = 'none'; 
+          }
           if (document.getElementById('app').style.display === 'block') { checkNotice(); }
         }
       });
 
+      // Submissions Listener
       db.ref('submissions/' + tgUser.id).on('value', snap => {
         appState.submissions = snap.val() || {};
         renderTaskHistory(); renderSocialTasks(); renderTasks(); checkNotice();
       });
 
+      // Withdrawals Listener
       db.ref('withdrawals').on('value', snap => {
-        appState.wdHistory = {}; snap.forEach(child => { let d = child.val(); if(d.userId == tgUser.id) { appState.wdHistory[child.key] = d; } });
+        appState.wdHistory = {}; 
+        snap.forEach(child => { 
+            let d = child.val(); 
+            if(d.userId == tgUser.id) { appState.wdHistory[child.key] = d; } 
+        });
         renderWdHistory(); checkNotice();
       });
 
       const userRef = db.ref('users/' + tgUser.id);
+      
+      // 🔥 নতুন ইউজার তৈরি এবং রেফারেল বোনাস লজিক (সংশোধিত)
       userRef.once('value').then(async snap => {
         const today = todayStr();
         if(!snap.exists()) {
-          appState.user = { id: tgUser.id, name: tgUser.first_name, photo: tgUser.photo_url||'', balance: 0, totalEarned: 0, referrals: 0, dailyAds: {}, taskHistory: {}, lastActive: today, dailyBonusDate: '', lastReadNoticeAt: 0, lastReadTaskAt: 0, lastReadWdAt: 0, isBanned: false, milestoneClaimed: false };
+          // নতুন ইউজার তৈরি
+          appState.user = { 
+              id: tgUser.id, name: tgUser.first_name, photo: tgUser.photo_url||'', balance: 0, totalEarned: 0, referrals: 0, dailyAds: {}, taskHistory: {}, lastActive: today, dailyBonusDate: '', lastReadNoticeAt: 0, lastReadTaskAt: 0, lastReadWdAt: 0, isBanned: false, milestoneClaimed: false 
+          };
           await userRef.set(appState.user);
+
+          // রেফারেল আইডি চেক করা
           let refBy = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) ? tg.initDataUnsafe.start_param : null;
-          if(!refBy) { const urlParams = new URLSearchParams(window.location.search); refBy = urlParams.get('tgWebAppStartParam') || urlParams.get('startapp'); }
+          if(!refBy) { 
+              const urlParams = new URLSearchParams(window.location.search); 
+              refBy = urlParams.get('tgWebAppStartParam') || urlParams.get('startapp'); 
+          }
+
           if(refBy && String(refBy) !== String(tgUser.id)) {
-             let cSnap = await db.ref('config').once('value'); let rBonus = (cSnap.exists() && cSnap.val().refBonus) ? Number(cSnap.val().refBonus) : 5; let refSnap = await db.ref('users/' + refBy).once('value');
-             if(refSnap.exists()){ let r = refSnap.val(); await db.ref('users/' + refBy).update({ referrals: (r.referrals || 0) + 1, balance: (r.balance || 0) + rBonus, totalEarned: (r.totalEarned || 0) + rBonus }); }
+             // কনফিগ থেকে রেফার বোনাস নেওয়া
+             let cSnap = await db.ref('config').once('value'); 
+             let configData = cSnap.val() || {};
+             let rBonus = configData.refBonus ? Number(configData.refBonus) : 5; // ডিফল্ট 5 টাকা
+
+             // রেফারার এর ডাটা চেক
+             let refSnap = await db.ref('users/' + refBy).once('value');
+             if(refSnap.exists()){ 
+                 // 🔥 Transaction ব্যবহার করে সেফলি ব্যালেন্স আপডেট
+                 await db.ref('users/' + refBy).transaction(refUser => {
+                     if (refUser) {
+                         refUser.referrals = (refUser.referrals || 0) + 1;
+                         refUser.balance = (refUser.balance || 0) + rBonus;
+                         refUser.totalEarned = (refUser.totalEarned || 0) + rBonus;
+                     }
+                     return refUser;
+                 });
+                 
+                 // নতুন ইউজারের ডাটাবেসে রেফারার আইডি সেভ করে রাখা
+                 await userRef.update({ referredBy: refBy });
+             }
           }
         }
 
+        // 🔥 লাইভ ইউজার আপডেট লিসেনার
         userRef.on('value', async liveSnap => {
           if(liveSnap.exists()) {
-            appState.user = liveSnap.val(); if(!appState.user.dailyAds) appState.user.dailyAds = {}; if(!appState.user.taskHistory) appState.user.taskHistory = {};
-            if(!appState.user.lastReadNoticeAt) appState.user.lastReadNoticeAt = 0; if(!appState.user.lastReadTaskAt) appState.user.lastReadTaskAt = 0; if(!appState.user.lastReadWdAt) appState.user.lastReadWdAt = 0;
-            if(typeof appState.user.isBanned === 'undefined') appState.user.isBanned = false; if(typeof appState.user.milestoneClaimed === 'undefined') appState.user.milestoneClaimed = false;
-            if(appState.user.lastActive !== today) { await userRef.update({ dailyAds: {}, lastActive: today }); appState.user.dailyAds = {}; }
+            appState.user = liveSnap.val(); 
+            if(!appState.user.dailyAds) appState.user.dailyAds = {}; 
+            if(!appState.user.taskHistory) appState.user.taskHistory = {};
+            if(!appState.user.lastReadNoticeAt) appState.user.lastReadNoticeAt = 0; 
+            if(!appState.user.lastReadTaskAt) appState.user.lastReadTaskAt = 0; 
+            if(!appState.user.lastReadWdAt) appState.user.lastReadWdAt = 0;
+            if(typeof appState.user.isBanned === 'undefined') appState.user.isBanned = false; 
+            if(typeof appState.user.milestoneClaimed === 'undefined') appState.user.milestoneClaimed = false;
+            
+            // প্রতিদিনের রিসেট
+            if(appState.user.lastActive !== today) { 
+                await userRef.update({ dailyAds: {}, lastActive: today }); 
+                appState.user.dailyAds = {}; 
+            }
 
+            // ব্যান চেক
             if(appState.user.isBanned === true) {
-              document.getElementById('loader').style.display = 'none'; document.getElementById('app').style.display = 'none'; document.getElementById('maintenanceOverlay').style.display = 'none'; document.getElementById('bannedOverlay').style.display = 'flex'; return; 
-            } else { document.getElementById('bannedOverlay').style.display = 'none'; }
+              document.getElementById('loader').style.display = 'none'; 
+              document.getElementById('app').style.display = 'none'; 
+              document.getElementById('maintenanceOverlay').style.display = 'none'; 
+              document.getElementById('bannedOverlay').style.display = 'flex'; 
+              return; 
+            } else { 
+              document.getElementById('bannedOverlay').style.display = 'none'; 
+            }
 
-            updateTextElements(); renderAds(); renderTasks(); renderSocialTasks(); checkNotice(); 
+            updateTextElements(); 
+            renderAds(); 
+            renderTasks(); 
+            renderSocialTasks(); 
+            checkNotice(); 
 
             if(!isBooted) {
               isBooted = true;
               if (appState.config.maintenance !== true) {
-                  document.getElementById('loader').style.display='none'; document.getElementById('app').style.display='block';
-                  if(appState.user.dailyBonusDate !== today && appState.config.bonusEnabled !== false) showBonus(); if(appState.config.popupNotice && appState.config.popupNotice.enabled) { showPopupNotice(appState.config.popupNotice); }
+                  document.getElementById('loader').style.display='none'; 
+                  document.getElementById('app').style.display='block';
+                  if(appState.user.dailyBonusDate !== today && appState.config.bonusEnabled !== false) showBonus(); 
+                  if(appState.config.popupNotice && appState.config.popupNotice.enabled) { showPopupNotice(appState.config.popupNotice); }
               }
             }
           }
@@ -1161,4 +1244,4 @@
     };
   </script>
 </body>
-  </html>
+</html>
